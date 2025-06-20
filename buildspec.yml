@@ -23,7 +23,7 @@ phases:
   post_build:
     commands:
       - echo "Tagging, Pushing, and Deploying to each account..."
-      - |
+      - >
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "--------------------------------------------------"
           echo "Processing Account: $account_id"

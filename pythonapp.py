@@ -1,46 +1,79 @@
-from flask import Flask, jsonify
-import boto3
-from botocore.exceptions import NoCredentialsError, PartialCredentialsError
+version: 0.2
 
-app = Flask(__name__)
+env:
+  variables:
+    AWS_REGION: "us-east-1"
+    TARGET_ACCOUNT_IDS: "861530259719 418272799989"
+    IMAGE_REPO_NAME: "demoimages"
+    LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
 
-# Configure your S3 bucket name and AWS region
-BUCKET_NAME = 'S3BUCKETNAME'
-REGION_NAME = 'us-east-1'
+phases:
+  pre_build:
+    commands:
+      - echo "Starting the build process..."
+      - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
+      - IMAGE_TAG=$COMMIT_ID
+      - 'echo "GitHub Commit ID: $IMAGE_TAG"'
 
-# Initialize S3 client using boto3
-s3 = boto3.client('s3', region_name=REGION_NAME)
+  build:
+    commands:
+      - echo "Building the Docker image with tag $IMAGE_TAG..."
+      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
 
-@app.route('/list-bucket-content', defaults={'path': ''}, methods=['GET'])
-@app.route('/list-bucket-content/<path:path>', methods=['GET'])
-def list_bucket_content(path):
-    try:
-        # Ensure path ends with '/' to fetch the contents of directories properly
-        prefix = path if path.endswith('/') or path == '' else f'{path}/'
+  post_build:
+    commands:
+      - echo "Tagging, Pushing, and Deploying to each account..."
+      - |
+        for account_id in $TARGET_ACCOUNT_IDS; do
+          echo "--------------------------------------------------"
+          echo "Processing Account: $account_id"
+          echo "--------------------------------------------------"
 
-        # Get objects under the given path
-        response = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=prefix, Delimiter='/')
+          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
+          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
 
-        # Prepare list of directories and files in the response
-        contents = []
+          echo "Assuming role in account $account_id..."
+          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-Deploy-Session-$account_id")
+          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
+          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
+          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
 
-        # Common prefixes represent directories
-        if 'CommonPrefixes' in response:
-            contents.extend([prefix['Prefix'].rstrip('/') for prefix in response['CommonPrefixes']])
+          echo "Logging in to ECR for account $account_id..."
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $account_id.dkr.ecr.$AWS_REGION.amazonaws.com
 
-        # Contents represent files
-        if 'Contents' in response:
-            contents.extend([item['Key'][len(prefix):].rstrip('/') for item in response['Contents'] if item['Key'] != prefix])
+          echo "Pushing image to $TARGET_ECR_URI:$IMAGE_TAG..."
+          docker push $TARGET_ECR_URI:$IMAGE_TAG
 
-        return jsonify({"content": contents})
+          echo "Fetching image digest..."
+          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
 
-    except NoCredentialsError:
-        return jsonify({"error": "No AWS credentials found."}), 403
-    except PartialCredentialsError:
-        return jsonify({"error": "Incomplete AWS credentials."}), 403
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+          echo "Updating Lambda function '$LAMBDA_FUNCTION_NAME'..."
+          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
+          echo "Lambda function updated."
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3000)
-    
+          # --- CORRECTED CLEANUP LOGIC ---
+          echo "Cleaning up old images..."
+          IMAGES_TO_DELETE=$(aws ecr describe-images \
+            --repository-name $IMAGE_REPO_NAME \
+            --query "sort_by(imageDetails, &imagePushedAt)[:-2][].imageDigest" \
+            --output json)
+
+          if [ "$(echo "$IMAGES_TO_DELETE" | jq 'length')" -gt 0 ]; then
+            echo "The following old image digests will be deleted:"
+            echo "$IMAGES_TO_DELETE" | jq .
+            DELETE_IMAGE_IDS=$(echo "$IMAGES_TO_DELETE" | jq '[.[] | {imageDigest: .}]')
+            aws ecr batch-delete-image \
+              --repository-name $IMAGE_REPO_NAME \
+              --image-ids "$DELETE_IMAGE_IDS" > /dev/null
+            echo "Successfully deleted old images."
+          else
+            echo "No old images to delete. Skipping cleanup."
+          fi
+          # --- END OF CLEANUP LOGIC ---
+
+          unset AWS_ACCESS_KEY_ID
+          unset AWS_SECRET_ACCESS_KEY
+          unset AWS_SESSION_TOKEN
+          echo "Finished processing account $account_id."
+          echo "--------------------------------------------------"
+        done

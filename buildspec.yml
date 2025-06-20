@@ -1,71 +1,73 @@
-pipeline:
-  version: 0.2
+# The "version" key must be at the top level
+version: 0.2
 
-  env:
-    variables:
-      AWS_REGION: "us-east-1"
-      TARGET_ACCOUNT_IDS: "861530259719 418272799989"
-      IMAGE_REPO_NAME: "demoimages"
-      LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
+# The "env" key must be at the top level
+env:
+  variables:
+    AWS_REGION: "us-east-1"
+    TARGET_ACCOUNT_IDS: "861530259719 418272799989"
+    IMAGE_REPO_NAME: "demoimages"
+    LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
 
-  phases:
-    pre_build:
-      commands:
-        - echo "Starting the build process..."
-        - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-        - IMAGE_TAG=$COMMIT_ID
-        - echo "GitHub Commit ID: $IMAGE_TAG"
+# The "phases" key must be at the top level
+phases:
+  pre_build:
+    commands:
+      - echo "Starting the build process..."
+      - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
+      - IMAGE_TAG=$COMMIT_ID
+      - echo "GitHub Commit ID: $IMAGE_TAG"
 
-    build:
-      commands:
-        - echo "Building the Docker image with tag $IMAGE_TAG..."
-        - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+  build:
+    commands:
+      - echo "Building the Docker image with tag $IMAGE_TAG..."
+      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
 
-    post_build:
-      commands:
-        - echo "Tagging, Pushing, and Deploying to each account..."
-        - |  # <-- CORRECTED: Use the literal block scalar for multi-line scripts
-          for account_id in $TARGET_ACCOUNT_IDS; do
-            echo "--------------------------------------------------"
-            echo "Processing Account: $account_id"
-            echo "--------------------------------------------------"
+  post_build:
+    commands:
+      - echo "Tagging, Pushing, and Deploying to each account..."
+      - |
+        for account_id in $TARGET_ACCOUNT_IDS; do
+          echo "--------------------------------------------------"
+          echo "Processing Account: $account_id"
+          echo "--------------------------------------------------"
 
-            TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
-            docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
+          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
+          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
 
-            echo "Assuming role in account $account_id..."
-            CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-Deploy-Session-$account_id")
-            export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
-            export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
-            export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
+          echo "Assuming role in account $account_id..."
+          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-Deploy-Session-$account_id")
+          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
+          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
+          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
 
-            echo "Logging in to ECR for account $account_id..."
-            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $account_id.dkr.ecr.$AWS_REGION.amazonaws.com
+          echo "Logging in to ECR for account $account_id..."
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $account_id.dkr.ecr.$AWS_REGION.amazonaws.com
 
-            echo "Pushing image to $TARGET_ECR_URI:$IMAGE_TAG..."
-            docker push $TARGET_ECR_URI:$IMAGE_TAG
+          echo "Pushing image to $TARGET_ECR_URI:$IMAGE_TAG..."
+          docker push $TARGET_ECR_URI:$IMAGE_TAG
 
-            echo "Fetching image digest..."
-            IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
+          echo "Fetching image digest..."
+          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
 
-            echo "Updating Lambda function '$LAMBDA_FUNCTION_NAME'..."
-            aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
-            echo "Lambda function updated."
+          echo "Updating Lambda function '$LAMBDA_FUNCTION_NAME'..."
+          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
+          echo "Lambda function updated."
 
-            echo "Cleaning up old images..."
-            image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query 'imageDetails[].imageTags[0]' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r)
-            keep_tags=$(echo "$image_tags" | head -n 2)
-            delete_tags=$(echo "$image_tags" | grep -v -F "$keep_tags")
+          echo "Cleaning up old images..."
+          image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query 'imageDetails[].imageTags[0]' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r)
+          keep_tags=$(echo "$image_tags" | head -n 2)
+          delete_tags=$(echo "$image_tags" | grep -v -F "$keep_tags")
 
-            for tag in $delete_tags; do
-              echo "Deleting old image tag: $tag"
-              digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query 'imageDetails[0].imageDigest' --output text)
-              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageDigest=$digest || true
-            done
-
-            unset AWS_ACCESS_KEY_ID
-            unset AWS_SECRET_ACCESS_KEY
-            unset AWS_SESSION_TOKEN
-            echo "Finished processing account $account_id."
-            echo "--------------------------------------------------"
+          for tag in $delete_tags; do
+            echo "Deleting old image tag: $tag"
+            digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query 'imageDetails[0].imageDigest' --output text)
+            aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageDigest=$digest || true
           done
+
+          unset AWS_ACCESS_KEY_ID
+          unset AWS_SECRET_ACCESS_KEY
+          unset AWS_SESSION_TOKEN
+          echo "Finished processing account $account_id."
+          echo "--------------------------------------------------"
+        done

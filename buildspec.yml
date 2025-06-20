@@ -19,7 +19,6 @@ phases:
     commands:
       - echo "Building the Docker image..."
       # Use the ECR Public mirror to avoid Docker Hub rate limits
-      - sed -i 's|FROM python:3.9-slim|FROM public.ecr.aws/docker/library/python:3.9-slim|' Dockerfile
       - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
 
   post_build:

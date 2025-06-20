@@ -1,0 +1,34 @@
+# File: buildspec_cleanup.yml
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - echo "Cleaning up old ECR images in each account..."
+      - |
+        set -e
+        for account_id in $TARGET_ACCOUNT_IDS; do
+          echo "--- Processing Account: $account_id ---"
+          
+          echo "Assuming role in account $account_id..."
+          ROLE_ARN="arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts"
+          CREDS=$(aws sts assume-role --role-arn $ROLE_ARN --role-session-name "CodeBuild-Cleanup-Session")
+          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
+          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
+          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
+
+          echo "Finding old images to delete..."
+          IMAGES_TO_DELETE=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query "sort_by(imageDetails, &imagePushedAt)[:-2][].imageDigest" --output json)
+
+          if [ "$(echo "$IMAGES_TO_DELETE" | jq 'length')" -gt 0 ]; then
+            echo "The following old image digests will be deleted:"
+            echo "$IMAGES_TO_DELETE" | jq .
+            DELETE_IMAGE_IDS=$(echo "$IMAGES_TO_DELETE" | jq '[.[] | {imageDigest: .}]')
+            aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids "$DELETE_IMAGE_IDS"
+            echo "Successfully deleted old images."
+          else
+            echo "No old images to delete. Skipping cleanup."
+          fi
+          
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+        done

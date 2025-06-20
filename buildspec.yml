@@ -3,49 +3,66 @@ version: 0.2
 env:
   variables:
     AWS_REGION: "us-east-1"
+    # A space-separated list of your target account IDs
     TARGET_ACCOUNT_IDS: "861530259719 418272799989" 
     IMAGE_REPO_NAME: "demoimages"
     IMAGE_TAG: "latest"
+    # The name of the Lambda function to update in each target account
+    LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
 
 phases:
-  # The 'install' phase has been removed as it's not needed.
-  # Docker is already included in the standard build image.
-  
   pre_build:
     commands:
-      - echo "Logging in to multiple ECR registries..."
+      - echo "Starting the build process..."
+      
+  build:
+    commands:
+      - echo "Building the Docker image..."
+      # Use the ECR Public mirror to avoid Docker Hub rate limits
+      - sed -i 's|FROM python:3.9-slim|FROM public.ecr.aws/docker/library/python:3.9-slim|' Dockerfile
+      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+
+  post_build:
+    commands:
+      - echo "Tagging, Pushing, and Deploying to each account..."
       - |
         for account_id in $TARGET_ACCOUNT_IDS; do
-          echo "Assuming role in account $account_id"
-          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-ECR-Push-Session")
+          echo "--------------------------------------------------"
+          echo "Processing Account: $account_id"
+          echo "--------------------------------------------------"
+
+          # Step 1: Tag the image for the target account
+          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
+          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
           
+          # Step 2: Assume the role in the target account
+          echo "Assuming role in account $account_id..."
+          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/ECR-Push-Role-From-CICD --role-session-name "CodeBuild-Deploy-Session-$account_id")
           export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
           export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
           export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
           
-          echo "Logging in to ECR for account $account_id"
+          # Step 3: Log in to the target ECR
+          echo "Logging in to ECR for account $account_id..."
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $account_id.dkr.ecr.$AWS_REGION.amazonaws.com
           
+          # Step 4: Push the Docker image
+          echo "Pushing image to $TARGET_ECR_URI:$IMAGE_TAG..."
+          docker push $TARGET_ECR_URI:$IMAGE_TAG
+          
+          # Step 5: Get the image digest for reliability
+          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
+          echo "Image successfully pushed. Digest: $IMAGE_DIGEST"
+          
+          # Step 6: Update the Lambda function
+          echo "Updating Lambda function '$LAMBDA_FUNCTION_NAME'..."
+          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
+          echo "Lambda function update command sent."
+
+          # Step 7: Clean up credentials for the next loop
           unset AWS_ACCESS_KEY_ID
           unset AWS_SECRET_ACCESS_KEY
           unset AWS_SESSION_TOKEN
-        done
-
-  build:
-    commands:
-      - echo "Building the Docker image..."
-      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
-      - |
-        for account_id in $TARGET_ACCOUNT_IDS; do
-          echo "Tagging image for account $account_id"
-          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
-        done
-
-  post_build:
-    commands:
-      - echo "Pushing Docker images to multiple ECR repositories..."
-      - |
-        for account_id in $TARGET_ACCOUNT_IDS; do
-          echo "Pushing to $account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG"
-          docker push $account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+          echo "Finished processing account $account_id."
+          echo "--------------------------------------------------"
         done

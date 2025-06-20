@@ -1,7 +1,5 @@
-# The "version" key must be at the top level
 version: 0.2
 
-# The "env" key must be at the top level
 env:
   variables:
     AWS_REGION: "us-east-1"
@@ -9,14 +7,14 @@ env:
     IMAGE_REPO_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
 
-# The "phases" key must be at the top level
 phases:
   pre_build:
     commands:
       - echo "Starting the build process..."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - IMAGE_TAG=$COMMIT_ID
-      - echo "GitHub Commit ID: $IMAGE_TAG"
+      # CORRECTED: Wrap the command with single quotes to escape the colon for the YAML parser
+      - 'echo "GitHub Commit ID: $IMAGE_TAG"'
 
   build:
     commands:

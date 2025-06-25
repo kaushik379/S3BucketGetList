@@ -24,10 +24,11 @@ phases:
   post_build:
     commands:
       - echo "Post-build: pushing to ECR and updating Lambda..."
-      - |
+      - >
+        bash -c '
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "----------------- Processing Account: $account_id -----------------"
-          
+
           TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
           docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
 
@@ -44,12 +45,12 @@ phases:
           docker push $TARGET_ECR_URI:$IMAGE_TAG
 
           echo "Fetching image digest..."
-          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
+          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query "imageDetails[0].imageDigest" --output text)
 
-          echo "Checking if Lambda function exists..."
-          if aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION 2>&1 | grep -q 'ResourceNotFoundException'; then
-            echo "Creating Lambda function..."
-            ROLE_ARN=$(aws iam get-role --role-name $LAMBDA_ROLE_NAME --query 'Role.Arn' --output text --region $AWS_REGION)
+          echo "Checking if Lambda exists..."
+          if aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION 2>&1 | grep -q "ResourceNotFoundException"; then
+            echo "Creating Lambda..."
+            ROLE_ARN=$(aws iam get-role --role-name $LAMBDA_ROLE_NAME --query "Role.Arn" --output text --region $AWS_REGION)
 
             aws lambda create-function \
               --function-name $LAMBDA_FUNCTION_NAME \
@@ -58,17 +59,17 @@ phases:
               --role $ROLE_ARN \
               --timeout 780 \
               --memory-size 512 \
-              --ephemeral-storage '{"Size":512}' \
+              --ephemeral-storage "{\"Size\":512}" \
               --region $AWS_REGION
           else
-            echo "Updating existing Lambda function..."
+            echo "Updating Lambda..."
             aws lambda update-function-code \
               --function-name $LAMBDA_FUNCTION_NAME \
               --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST" \
               --region $AWS_REGION
           fi
 
-          echo "Ensuring Lambda Function URL exists with RESPONSE_STREAM..."
+          echo "Ensuring Function URL..."
           FUNC_URL_EXISTS=$(aws lambda get-function-url-config --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION 2>/dev/null || true)
 
           if [[ "$FUNC_URL_EXISTS" == "" ]]; then
@@ -79,40 +80,36 @@ phases:
               --invoke-mode RESPONSE_STREAM \
               --region $AWS_REGION
 
-            echo "Adding invoke permission to Lambda URL..."
             aws lambda add-permission \
               --function-name $LAMBDA_FUNCTION_NAME \
               --action lambda:InvokeFunctionUrl \
-              --principal '*' \
+              --principal "*" \
               --function-url-auth-type NONE \
               --statement-id allow-public-url-access \
               --region $AWS_REGION
           else
-            echo "Function URL already exists, updating to ensure RESPONSE_STREAM is set..."
             aws lambda update-function-url-config \
               --function-name $LAMBDA_FUNCTION_NAME \
-              --invoke-mode RESPONSE_STREAM \
               --auth-type NONE \
+              --invoke-mode RESPONSE_STREAM \
               --region $AWS_REGION
           fi
 
-          FUNC_URL=$(aws lambda get-function-url-config --function-name $LAMBDA_FUNCTION_NAME --query 'FunctionUrl' --output text --region $AWS_REGION)
+          FUNC_URL=$(aws lambda get-function-url-config --function-name $LAMBDA_FUNCTION_NAME --query "FunctionUrl" --output text --region $AWS_REGION)
           echo "Lambda Function URL for $account_id: $FUNC_URL"
 
-          echo "Cleaning up old images..."
-          image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query 'imageDetails[].imageTags[0]' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r)
+          echo "Cleaning up old image tags..."
+          image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query "imageDetails[].imageTags[0]" --output text | tr "\t" "\n" | grep -E "^[0-9a-f]{7}$" | sort -r)
           keep_tags=$(echo "$image_tags" | head -n 2)
           delete_tags=$(echo "$image_tags" | grep -v -F "$keep_tags")
 
           for tag in $delete_tags; do
-            echo "Deleting old tag: $tag"
-            digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query 'imageDetails[0].imageDigest' --output text)
+            echo "Deleting tag: $tag"
+            digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query "imageDetails[0].imageDigest" --output text)
             aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageDigest=$digest || true
           done
 
-          echo "Clearing credentials..."
           unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-
-          echo "Finished processing account $account_id"
-          echo "--------------------------------------------------"
+          echo "Done with account: $account_id"
         done
+        '

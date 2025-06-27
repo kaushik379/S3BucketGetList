@@ -1,108 +1,70 @@
 version: 0.2
 
+# These environment variables are configured in the CodePipeline's CodeBuild stage
+# The values below are defaults and will be overridden by the pipeline definition.
 env:
   variables:
-    AWS_REGION: "us-east-1"
-    TARGET_ACCOUNT_IDS: "861530259719"
-    IMAGE_REPO_NAME: "demoimages"
+    AWS_ACCOUNT_ID: "9431432288443"
+    ECR_REPOSITORY_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
+    CFN_S3_BUCKET: "ecr-lambda-ai-house-rnd"
+    ECR_CFN_TEMPLATE: "AiHouse-ecr-lambda.yml"
+    LAMBDA_CFN_TEMPLATE: "ai-house-lambda-function-template.yaml"
 
 phases:
   pre_build:
     commands:
-      - echo "Starting the build process..."
-      - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-      - IMAGE_TAG=$COMMIT_ID
-      - 'echo "GitHub Commit ID: $IMAGE_TAG"'
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPOSITORY_NAME
+      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:-latest}
 
   build:
     commands:
-      - echo "Building the Docker image with tag $IMAGE_TAG..."
-      - 'docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .'
+      - echo "--- Step 1: Check for ECR Repository and Build Image ---"
+      # Check if the ECR repository exists by trying to describe it.
+      # We redirect output to /dev/null to hide the "not found" error from logs.
+      - |
+        if ! aws ecr describe-repositories --repository-names $ECR_REPOSITORY_NAME --region $AWS_DEFAULT_REGION > /dev/null 2>&1; then
+          echo "ECR repository '$ECR_REPOSITORY_NAME' not found. Creating it with CloudFormation..."
+          aws cloudformation create-stack \
+            --stack-name Create-ECR-For-Pipeline \
+            --template-url https://$CFN_S3_BUCKET.s3.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_CFN_TEMPLATE \
+            --region $AWS_DEFAULT_REGION
+          echo "Waiting for ECR stack creation to complete..."
+          aws cloudformation wait stack-create-complete --stack-name Create-ECR-For-Pipeline --region $AWS_DEFAULT_REGION
+          echo "ECR Repository created successfully."
+        else
+          echo "ECR repository '$ECR_REPOSITORY_NAME' already exists. Skipping creation."
+        fi
+
+      - echo "Building the Docker image..."
+      # Assumes a Dockerfile is in the root of the repository
+      - docker build -t $ECR_REPOSITORY_NAME:$IMAGE_TAG .
+      - docker tag $ECR_REPOSITORY_NAME:$IMAGE_TAG $REPOSITORY_URI:$IMAGE_TAG
 
   post_build:
     commands:
+      - echo "Pushing the Docker image to ECR..."
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      
+      - echo "--- Step 2: Check for Lambda Function ---"
+      # Check if the Lambda function exists. Redirect output to hide errors.
       - |
-        # ---- SOLUTION: ADD THIS LINE ----
-        # Exit immediately if a command exits with a non-zero status.
-        set -e
-        # ---------------------------------
-
-        for account_id in $TARGET_ACCOUNT_IDS; do
-          echo "--------------------------------------------------"
-          echo "Processing Account: $account_id"
-          echo "--------------------------------------------------"
-
-          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
-          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
-
-          echo "Assuming role in account $account_id..."
-          # If this command fails, the script will now exit and show the actual error.
-          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-Deploy-Session-$account_id")
-          
-          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
-          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
-          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
-
-          echo "Checking if ECR repository exists..."
-          if ! aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1; then
-            echo "ECR repository not found. Deploying ECR CloudFormation template..."
-            curl -o ecr-template.yml https://ecr-lambda-ai-house-rnd.s3.us-east-1.amazonaws.com/AiHouse-ecr-lambda.yml
-            
-            aws cloudformation deploy \
-              --template-file ecr-template.yml \
-              --stack-name create-ecr-$account_id \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region $AWS_REGION \
-              --parameter-overrides RepositoryName=$IMAGE_REPO_NAME
-              --debug
-          else
-            echo "ECR repository already exists."
-          fi
-
-          echo "Logging in to ECR and pushing image..."
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $account_id.dkr.ecr.$AWS_REGION.amazonaws.com
-          docker push $TARGET_ECR_URI:$IMAGE_TAG
-
-          echo "Fetching image digest..."
-          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
-
-          echo "Checking if Lambda function exists..."
-          if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1; then
-            echo "Lambda function not found. Deploying Lambda CloudFormation template..."
-            curl -o lambda-template.yaml https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml
-            
-            aws cloudformation deploy \
-              --template-file lambda-template.yaml \
-              --stack-name create-lambda-$account_id \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region $AWS_REGION \
-              --parameter-overrides LambdaImageTag=$IMAGE_TAG
-              --debug
-          else
-            echo "Updating existing Lambda function..."
-            aws lambda update-function-code \
-              --function-name $LAMBDA_FUNCTION_NAME \
-              --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
-          fi
-
-          echo "Cleaning up old images..."
-          # NOTE: The logic for cleaning up old images might be too aggressive, as seen in your logs where it deletes the image it just pushed.
-          # You may want to adjust `tail -n +3` to `tail -n +4` or a higher number depending on how many images you wish to keep.
-          image_tags_to_delete=$(aws ecr list-images --repository-name $IMAGE_REPO_NAME --query 'imageIds[*].imageTag' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r | tail -n +3)
-          if [ -n "$image_tags_to_delete" ]; then
-            for tag in $image_tags_to_delete; do
-              echo "Deleting old image with tag: $tag"
-              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag || echo "Failed to delete tag $tag, continuing..."
-            done
-          else
-            echo "No old images to delete."
-          fi
-
-          unset AWS_ACCESS_KEY_ID
-          unset AWS_SECRET_ACCESS_KEY
-          unset AWS_SESSION_TOKEN
-
-          echo "Finished processing account $account_id."
-          echo "--------------------------------------------------"
-        done
+        if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_DEFAULT_REGION > /dev/null 2>&1; then
+          echo "Lambda function '$LAMBDA_FUNCTION_NAME' not found. Creating it with CloudFormation..."
+          aws cloudformation create-stack \
+            --stack-name Create-Lambda-For-Pipeline \
+            --template-url https://$CFN_S3_BUCKET.s3.$AWS_DEFAULT_REGION.amazonaws.com/$LAMBDA_CFN_TEMPLATE \
+            --parameters ParameterKey=ImageUri,ParameterValue=$REPOSITORY_URI:$IMAGE_TAG \
+            --capabilities CAPABILITY_IAM \
+            --region $AWS_DEFAULT_REGION
+          echo "Waiting for Lambda stack creation to complete..."
+          aws cloudformation wait stack-create-complete --stack-name Create-Lambda-For-Pipeline --region $AWS_DEFAULT_REGION
+          echo "Lambda function created successfully."
+        else
+          echo "Lambda function '$LAMBDA_FUNCTION_NAME' already exists. Skipping creation."
+          echo "NOTE: To update the existing function with the new image, you would need an additional step or use a different deployment strategy like 'aws lambda update-function-code'."
+        fi
+      
+      - echo "Build and Deploy process completed."

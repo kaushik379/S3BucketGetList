@@ -1,7 +1,5 @@
 version: 0.2
 
-# These environment variables are configured in the CodePipeline's CodeBuild stage
-# The values below are defaults and will be overridden by the pipeline definition.
 env:
   variables:
     AWS_ACCOUNT_ID: "9431432288443"
@@ -17,13 +15,13 @@ phases:
       - echo "Logging in to Amazon ECR..."
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
       - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPOSITORY_NAME
-      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:-latest}
+      # Use the CodeBuild-provided commit ID for a unique image tag
+      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION}
 
   build:
     commands:
-      - echo "--- Step 1: Check for ECR Repository and Build Image ---"
-      # Check if the ECR repository exists by trying to describe it.
-      # We redirect output to /dev/null to hide the "not found" error from logs.
+      - echo "--- Step 1: Check for ECR Repository ---"
+      # This is a multi-line script block. The `- |` is critical.
       - |
         if ! aws ecr describe-repositories --repository-names $ECR_REPOSITORY_NAME --region $AWS_DEFAULT_REGION > /dev/null 2>&1; then
           echo "ECR repository '$ECR_REPOSITORY_NAME' not found. Creating it with CloudFormation..."
@@ -39,7 +37,6 @@ phases:
         fi
 
       - echo "Building the Docker image..."
-      # Assumes a Dockerfile is in the root of the repository
       - docker build -t $ECR_REPOSITORY_NAME:$IMAGE_TAG .
       - docker tag $ECR_REPOSITORY_NAME:$IMAGE_TAG $REPOSITORY_URI:$IMAGE_TAG
 
@@ -48,11 +45,11 @@ phases:
       - echo "Pushing the Docker image to ECR..."
       - docker push $REPOSITORY_URI:$IMAGE_TAG
       
-      - echo "--- Step 2: Check for Lambda Function ---"
-      # Check if the Lambda function exists. Redirect output to hide errors.
+      - echo "--- Step 2: Check for and Create/Update Lambda Function ---"
+      # This is the second multi-line script block. The `- |` is critical.
       - |
         if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_DEFAULT_REGION > /dev/null 2>&1; then
-          echo "Lambda function '$LAMBDA_FUNCTION_NAME' not found. Creating it with CloudFormation..."
+          echo "Lambda function '$LAMBDA_FUNCTION_NAME' not found. Creating it now via CloudFormation..."
           aws cloudformation create-stack \
             --stack-name Create-Lambda-For-Pipeline \
             --template-url https://$CFN_S3_BUCKET.s3.$AWS_DEFAULT_REGION.amazonaws.com/$LAMBDA_CFN_TEMPLATE \
@@ -63,8 +60,12 @@ phases:
           aws cloudformation wait stack-create-complete --stack-name Create-Lambda-For-Pipeline --region $AWS_DEFAULT_REGION
           echo "Lambda function created successfully."
         else
-          echo "Lambda function '$LAMBDA_FUNCTION_NAME' already exists. Skipping creation."
-          echo "NOTE: To update the existing function with the new image, you would need an additional step or use a different deployment strategy like 'aws lambda update-function-code'."
+          echo "Lambda function '$LAMBDA_FUNCTION_NAME' already exists. Updating its code..."
+          aws lambda update-function-code \
+            --function-name $LAMBDA_FUNCTION_NAME \
+            --image-uri $REPOSITORY_URI:$IMAGE_TAG \
+            --region $AWS_DEFAULT_REGION
+          echo "Lambda function updated successfully with the new image."
         fi
       
       - echo "Build and Deploy process completed."

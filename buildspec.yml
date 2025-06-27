@@ -13,22 +13,20 @@ phases:
       - echo "Starting the build process..."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - IMAGE_TAG=$COMMIT_ID
-      # CORRECTED LINE: The entire command is wrapped in single quotes to
-      # prevent the YAML parser from misinterpreting the colon ':'.
       - 'echo "GitHub Commit ID: $IMAGE_TAG"'
 
   build:
     commands:
       - echo "Building the Docker image with tag $IMAGE_TAG..."
-      # This line also has a colon, so it's best practice to quote it too.
       - 'docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .'
 
   post_build:
     commands:
       - echo "Tagging, Pushing, and Deploying to each account..."
-      # The pipe '|' is the correct way to handle this multi-line script.
-      # This part was already correct.
       - |
+        # Exit immediately if a command exits with a non-zero status.
+        set -e
+
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "--------------------------------------------------"
           echo "Processing Account: $account_id"
@@ -46,8 +44,10 @@ phases:
           echo "Checking if ECR repository exists..."
           if ! aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1; then
             echo "ECR repository not found. Deploying ECR CloudFormation template..."
+            # FIX: Download template first, then deploy from local file
+            aws s3 cp s3://ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml ecr-template.yml
             aws cloudformation deploy \
-              --template-url https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml \
+              --template-file ecr-template.yml \
               --stack-name create-ecr-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
@@ -66,8 +66,10 @@ phases:
           echo "Checking if Lambda function exists..."
           if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1; then
             echo "Lambda function not found. Deploying Lambda CloudFormation template..."
+            # FIX: Download template first, then deploy from local file
+            aws s3 cp s3://ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml lambda-template.yaml
             aws cloudformation deploy \
-              --template-url https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml \
+              --template-file lambda-template.yaml \
               --stack-name create-lambda-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
@@ -84,7 +86,7 @@ phases:
           if [ -n "$image_tags_to_delete" ]; then
             for tag in $image_tags_to_delete; do
               echo "Deleting old image with tag: $tag"
-              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag || echo "Failed to delete tag $tag, continuing..."
+              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag
             done
           else
             echo "No old images to delete."

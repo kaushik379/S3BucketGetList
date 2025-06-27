@@ -23,6 +23,11 @@ phases:
   post_build:
     commands:
       - |
+        # ---- SOLUTION: ADD THIS LINE ----
+        # Exit immediately if a command exits with a non-zero status.
+        set -e
+        # ---------------------------------
+
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "--------------------------------------------------"
           echo "Processing Account: $account_id"
@@ -32,7 +37,9 @@ phases:
           docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
 
           echo "Assuming role in account $account_id..."
+          # If this command fails, the script will now exit and show the actual error.
           CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-Deploy-Session-$account_id")
+          
           export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
           export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
           export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
@@ -42,7 +49,6 @@ phases:
             echo "ECR repository not found. Deploying ECR CloudFormation template..."
             curl -o ecr-template.yml https://ecr-lambda-ai-house-rnd.s3.us-east-1.amazonaws.com/AiHouse-ecr-lambda.yml
             
-            # This comment has been moved to its own line
             aws cloudformation deploy \
               --template-file ecr-template.yml \
               --stack-name create-ecr-$account_id \
@@ -65,7 +71,6 @@ phases:
             echo "Lambda function not found. Deploying Lambda CloudFormation template..."
             curl -o lambda-template.yaml https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml
             
-            # This comment has been moved to its own line
             aws cloudformation deploy \
               --template-file lambda-template.yaml \
               --stack-name create-lambda-$account_id \
@@ -80,6 +85,8 @@ phases:
           fi
 
           echo "Cleaning up old images..."
+          # NOTE: The logic for cleaning up old images might be too aggressive, as seen in your logs where it deletes the image it just pushed.
+          # You may want to adjust `tail -n +3` to `tail -n +4` or a higher number depending on how many images you wish to keep.
           image_tags_to_delete=$(aws ecr list-images --repository-name $IMAGE_REPO_NAME --query 'imageIds[*].imageTag' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r | tail -n +3)
           if [ -n "$image_tags_to_delete" ]; then
             for tag in $image_tags_to_delete; do

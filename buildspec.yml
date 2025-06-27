@@ -41,7 +41,7 @@ phases:
           if ! aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1; then
             echo "ECR repository not found. Deploying ECR CloudFormation template..."
             # FIXED: Download the template file from S3 first
-            curl -o ecr-template.yml https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml
+            curl -o ecr-template.yml https://ecr-lambda-ai-house-rnd.s3.us-east-1.amazonaws.com/AiHouse-ecr-lambda.yml
             aws cloudformation deploy \
               --template-file ecr-template.yml \ # FIXED: Changed --template-url to --template-file
               --stack-name create-ecr-$account_id \

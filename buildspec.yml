@@ -78,7 +78,7 @@ phases:
             echo "Deploying ECR CloudFormation template..."
             if ! aws cloudformation deploy \
               --template-file ecr-template.yml \
-              --stack-name create-ec sanitaires-ecr-$account_id \
+              --stack-name create-ecr-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
               --parameter-overrides RepositoryName=$IMAGE_REPO_NAME \
@@ -121,7 +121,7 @@ phases:
               exit 1
             fi
           else
-            echo40 "Updating existing Lambda function..."
+            echo "Updating existing Lambda function..."
             aws lambda update-function-code \
               --function-name $LAMBDA_FUNCTION_NAME \
               --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
@@ -144,4 +144,4 @@ phases:
 
           echo "Finished processing account $account_id."
           echo "--------------------------------------------------"
-0        done
+        done

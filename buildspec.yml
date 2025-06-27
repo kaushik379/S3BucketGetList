@@ -6,26 +6,13 @@ env:
     TARGET_ACCOUNT_IDS: "861530259719"
     IMAGE_REPO_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
-  exported-variables:
-    - CODEBUILD_RESOLVED_SOURCE_VERSION
+    IMAGE_TAG: "latest"
 
 phases:
   pre_build:
     commands:
       - echo "Starting the build process..."
-      - echo "CODEBUILD_RESOLVED_SOURCE_VERSION: $CODEBUILD_RESOLVED_SOURCE_VERSION"
-      - |
-        if [ -z "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then
-          echo "Error: CODEBUILD_RESOLVED_SOURCE_VERSION is not set. Exiting..."
-          exit 1
-        fi
-        COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-        if [ -z "$COMMIT_ID" ]; then
-          echo "Error: COMMIT_ID is empty. Exiting..."
-          exit 1
-        fi
-        IMAGE_TAG=$COMMIT_ID
-        echo "GitHub Commit ID: $IMAGE_TAG"
+      - echo "Using Docker image tag: $IMAGE_TAG"
 
   build:
     commands:
@@ -35,9 +22,8 @@ phases:
   post_build:
     commands:
       - |
-        # Exit immediately if a command exits with a non-zero status.
         set -e
-
+        echo "Starting post-build phase..."
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "--------------------------------------------------"
           echo "Processing Account: $account_id"
@@ -127,17 +113,6 @@ phases:
               --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
           fi
 
-          echo "Cleaning up old images..."
-          image_tags_to_delete=$(aws ecr list-images --repository-name $IMAGE_REPO_NAME --query 'imageIds[*].imageTag' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r | tail -n +4)
-          if [ -n "$image_tags_to_delete" ]; then
-            for tag in $image_tags_to_delete; do
-              echo "Deleting old image with tag: $tag"
-              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag || echo "Failed to delete tag $tag, continuing..."
-            done
-          else
-            echo "No old images to delete."
-          fi
-
           unset AWS_ACCESS_KEY_ID
           unset AWS_SECRET_ACCESS_KEY
           unset AWS_SESSION_TOKEN
@@ -145,3 +120,4 @@ phases:
           echo "Finished processing account $account_id."
           echo "--------------------------------------------------"
         done
+      - echo "Post-build phase completed."

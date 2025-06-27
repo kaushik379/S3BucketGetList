@@ -2,7 +2,7 @@ version: 0.2
 
 env:
   variables:
-    AWS_ACCOUNT_ID: "9431432288443"
+    AWS_ACCOUNT_ID: "861530259719"
     ECR_REPOSITORY_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
     CFN_S3_BUCKET: "ecr-lambda-ai-house-rnd"

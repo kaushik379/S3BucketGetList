@@ -20,6 +20,10 @@ phases:
       - echo "Building the Docker image with tag $IMAGE_TAG..."
       - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
 
+  # The 'post_build' phase contains a multi-line script.
+  # Using the pipe character '|' is crucial here. It tells YAML to treat
+  # the entire indented block as a single, literal string, preventing
+  # parsing errors caused by colons (:) within the commands.
   post_build:
     commands:
       - echo "Tagging, Pushing, and Deploying to each account..."
@@ -39,8 +43,7 @@ phases:
           export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
 
           echo "Checking if ECR repository exists..."
-          aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1
-          if [ $? -ne 0 ]; then
+          if ! aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1; then
             echo "ECR repository not found. Deploying ECR CloudFormation template..."
             aws cloudformation deploy \
               --template-url https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml \
@@ -60,8 +63,7 @@ phases:
           IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
 
           echo "Checking if Lambda function exists..."
-          aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1
-          if [ $? -ne 0 ]; then
+          if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1; then
             echo "Lambda function not found. Deploying Lambda CloudFormation template..."
             aws cloudformation deploy \
               --template-url https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml \
@@ -77,15 +79,15 @@ phases:
           fi
 
           echo "Cleaning up old images..."
-          image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query 'imageDetails[].imageTags[0]' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r)
-          keep_tags=$(echo "$image_tags" | head -n 2)
-          delete_tags=$(echo "$image_tags" | grep -v -F "$keep_tags")
-
-          for tag in $delete_tags; do
-            echo "Deleting old image tag: $tag"
-            digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query 'imageDetails[0].imageDigest' --output text)
-            aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageDigest=$digest || true
-          done
+          image_tags_to_delete=$(aws ecr list-images --repository-name $IMAGE_REPO_NAME --query 'imageIds[*].imageTag' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r | tail -n +3)
+          if [ -n "$image_tags_to_delete" ]; then
+            for tag in $image_tags_to_delete; do
+              echo "Deleting old image with tag: $tag"
+              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag || echo "Failed to delete tag $tag, continuing..."
+            done
+          else
+            echo "No old images to delete."
+          fi
 
           unset AWS_ACCESS_KEY_ID
           unset AWS_SECRET_ACCESS_KEY

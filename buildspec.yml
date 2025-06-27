@@ -6,24 +6,26 @@ env:
     TARGET_ACCOUNT_IDS: "861530259719"
     IMAGE_REPO_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
+  exported-variables:
+    - CODEBUILD_RESOLVED_SOURCE_VERSION
 
 phases:
   pre_build:
     commands:
       - echo "Starting the build process..."
+      - echo "CODEBUILD_RESOLVED_SOURCE_VERSION: $CODEBUILD_RESOLVED_SOURCE_VERSION"
       - |
         if [ -z "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then
           echo "Error: CODEBUILD_RESOLVED_SOURCE_VERSION is not set. Exiting..."
           exit 1
         fi
         COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-      - |
         if [ -z "$COMMIT_ID" ]; then
           echo "Error: COMMIT_ID is empty. Exiting..."
           exit 1
         fi
         IMAGE_TAG=$COMMIT_ID
-      - echo "GitHub Commit ID: $IMAGE_TAG"
+        echo "GitHub Commit ID: $IMAGE_TAG"
 
   build:
     commands:
@@ -76,7 +78,7 @@ phases:
             echo "Deploying ECR CloudFormation template..."
             if ! aws cloudformation deploy \
               --template-file ecr-template.yml \
-              --stack-name create-ecr-$account_id \
+              --stack-name create-ec sanitaires-ecr-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
               --parameter-overrides RepositoryName=$IMAGE_REPO_NAME \
@@ -119,7 +121,7 @@ phases:
               exit 1
             fi
           else
-            echo "Updating existing Lambda function..."
+            echo40 "Updating existing Lambda function..."
             aws lambda update-function-code \
               --function-name $LAMBDA_FUNCTION_NAME \
               --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
@@ -142,4 +144,4 @@ phases:
 
           echo "Finished processing account $account_id."
           echo "--------------------------------------------------"
-        done
+0        done

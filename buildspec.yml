@@ -11,8 +11,18 @@ phases:
   pre_build:
     commands:
       - echo "Starting the build process..."
-      - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-      - IMAGE_TAG=$COMMIT_ID
+      - |
+        if [ -z "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then
+          echo "Error: CODEBUILD_RESOLVED_SOURCE_VERSION is not set. Exiting..."
+          exit 1
+        fi
+        COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
+      - |
+        if [ -z "$COMMIT_ID" ]; then
+          echo "Error: COMMIT_ID is empty. Exiting..."
+          exit 1
+        fi
+        IMAGE_TAG=$COMMIT_ID
       - echo "GitHub Commit ID: $IMAGE_TAG"
 
   build:

@@ -49,7 +49,7 @@ phases:
               --region $AWS_REGION \
               --parameter-overrides RepositoryName=$IMAGE_REPO_NAME
           else
-            echo "ECR repository already exists." 
+            echo "ECR repository already exists."
           fi
 
           echo "Logging in to ECR and pushing image..."

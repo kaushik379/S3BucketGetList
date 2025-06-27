@@ -6,110 +6,91 @@ env:
     TARGET_ACCOUNT_IDS: "861530259719 418272799989"
     IMAGE_REPO_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
-    LAMBDA_ROLE_NAME: "ai-house-lambda-execution-role"
 
 phases:
   pre_build:
     commands:
-      - echo "Starting pre-build..."
+      - echo "Starting the build process..."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - IMAGE_TAG=$COMMIT_ID
-      - echo "Using image tag: $IMAGE_TAG"
+      # CORRECTED: Wrap the command with single quotes to escape the colon for the YAML parser
+      - 'echo "GitHub Commit ID: $IMAGE_TAG"'
 
   build:
     commands:
-      - echo "Building Docker image..."
-      - "docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG ."
+      - echo "Building the Docker image with tag $IMAGE_TAG..."
+      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+post_build:
+  commands:
+    - echo "Tagging, Pushing, and Deploying to each account..."
+    - |
+      for account_id in $TARGET_ACCOUNT_IDS; do
+        echo "--------------------------------------------------"
+        echo "Processing Account: $account_id"
+        echo "--------------------------------------------------"
 
-  post_build:
-    commands:
-      - echo "Post-build: pushing to ECR and updating Lambda..."
-      - |
-        bash -c '
-        for account_id in $TARGET_ACCOUNT_IDS; do
-          echo "----------------- Processing Account: $account_id -----------------"
+        TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
+        docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
 
-          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
-          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
+        echo "Assuming role in account $account_id..."
+        CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "CodeBuild-Deploy-Session-$account_id")
+        export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
+        export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
+        export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
 
-          echo "Assuming deployment role..."
-          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "PipelineSession")
-          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
-          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
-          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
+        echo "Checking if ECR repository exists..."
+        aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo "ECR repository not found. Deploying ECR CloudFormation template..."
+          aws cloudformation deploy \
+            --template-url https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml \
+            --stack-name create-ecr-$account_id \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region $AWS_REGION \
+            --parameter-overrides RepositoryName=$IMAGE_REPO_NAME
+        else
+          echo "ECR repository already exists." 
+        fi
 
-          echo "Logging into ECR..."
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $TARGET_ECR_URI
+        echo "Logging in to ECR and pushing image..."
+        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $account_id.dkr.ecr.$AWS_REGION.amazonaws.com
+        docker push $TARGET_ECR_URI:$IMAGE_TAG
 
-          echo "Pushing image..."
-          docker push $TARGET_ECR_URI:$IMAGE_TAG
+        echo "Fetching image digest..."
+        IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
 
-          echo "Fetching image digest..."
-          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query "imageDetails[0].imageDigest" --output text)
+        echo "Checking if Lambda function exists..."
+        aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo "Lambda function not found. Deploying Lambda CloudFormation template..."
+          aws cloudformation deploy \
+            --template-url https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml \
+            --stack-name create-lambda-$account_id \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region $AWS_REGION \
+            --parameter-overrides LambdaImageTag=$IMAGE_TAG
+        else
+          echo "Updating existing Lambda function..."
+          aws lambda update-function-code \
+            --function-name $LAMBDA_FUNCTION_NAME \
+            --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
+        fi
 
-          echo "Checking if Lambda exists..."
-          if aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION 2>&1 | grep -q "ResourceNotFoundException"; then
-            echo "Creating Lambda..."
-            ROLE_ARN=$(aws iam get-role --role-name $LAMBDA_ROLE_NAME --query "Role.Arn" --output text --region $AWS_REGION)
+        echo "Cleaning up old images..."
+        image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query 'imageDetails[].imageTags[0]' --output text | tr '\t' '\n' | grep -E '^[0-9a-f]{7}$' | sort -r)
+        keep_tags=$(echo "$image_tags" | head -n 2)
+        delete_tags=$(echo "$image_tags" | grep -v -F "$keep_tags")
 
-            aws lambda create-function \
-              --function-name $LAMBDA_FUNCTION_NAME \
-              --package-type Image \
-              --code ImageUri="$TARGET_ECR_URI@$IMAGE_DIGEST" \
-              --role $ROLE_ARN \
-              --timeout 780 \
-              --memory-size 512 \
-              --ephemeral-storage "{\"Size\":512}" \
-              --region $AWS_REGION
-          else
-            echo "Updating Lambda..."
-            aws lambda update-function-code \
-              --function-name $LAMBDA_FUNCTION_NAME \
-              --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST" \
-              --region $AWS_REGION
-          fi
-
-          echo "Ensuring Function URL..."
-          FUNC_URL_EXISTS=$(aws lambda get-function-url-config --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION 2>/dev/null || true)
-
-          if [[ "$FUNC_URL_EXISTS" == "" ]]; then
-            echo "Creating Function URL..."
-            aws lambda create-function-url-config \
-              --function-name $LAMBDA_FUNCTION_NAME \
-              --auth-type NONE \
-              --invoke-mode RESPONSE_STREAM \
-              --region $AWS_REGION
-
-            aws lambda add-permission \
-              --function-name $LAMBDA_FUNCTION_NAME \
-              --action lambda:InvokeFunctionUrl \
-              --principal "*" \
-              --function-url-auth-type NONE \
-              --statement-id allow-public-url-access \
-              --region $AWS_REGION
-          else
-            aws lambda update-function-url-config \
-              --function-name $LAMBDA_FUNCTION_NAME \
-              --auth-type NONE \
-              --invoke-mode RESPONSE_STREAM \
-              --region $AWS_REGION
-          fi
-
-          FUNC_URL=$(aws lambda get-function-url-config --function-name $LAMBDA_FUNCTION_NAME --query "FunctionUrl" --output text --region $AWS_REGION)
-          echo "Lambda Function URL for $account_id: $FUNC_URL"
-
-          echo "Cleaning up old image tags..."
-          image_tags=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query "imageDetails[].imageTags[0]" --output text | tr "\t" "\n" | grep -E "^[0-9a-f]{7}$" | sort -r)
-          keep_tags=$(echo "$image_tags" | head -n 2)
-          delete_tags=$(echo "$image_tags" | grep -v -F "$keep_tags")
-
-          for tag in $delete_tags; do
-            echo "Deleting tag: $tag"
-            digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query "imageDetails[0].imageDigest" --output text)
-            aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageDigest=$digest || true
-          done
-
-          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-          echo "Done with account: $account_id"
+        for tag in $delete_tags; do
+          echo "Deleting old image tag: $tag"
+          digest=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag --query 'imageDetails[0].imageDigest' --output text)
+          aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageDigest=$digest || true
         done
-        '
+
+        unset AWS_ACCESS_KEY_ID
+        unset AWS_SECRET_ACCESS_KEY
+        unset AWS_SESSION_TOKEN
+
+        echo "Finished processing account $account_id."
+        echo "--------------------------------------------------"
+      done

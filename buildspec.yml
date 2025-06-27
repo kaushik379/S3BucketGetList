@@ -40,10 +40,11 @@ phases:
           echo "Checking if ECR repository exists..."
           if ! aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1; then
             echo "ECR repository not found. Deploying ECR CloudFormation template..."
-            # FIXED: Download the template file from S3 first
             curl -o ecr-template.yml https://ecr-lambda-ai-house-rnd.s3.us-east-1.amazonaws.com/AiHouse-ecr-lambda.yml
+            
+            # This comment has been moved to its own line
             aws cloudformation deploy \
-              --template-file ecr-template.yml \ # FIXED: Changed --template-url to --template-file
+              --template-file ecr-template.yml \
               --stack-name create-ecr-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
@@ -62,10 +63,11 @@ phases:
           echo "Checking if Lambda function exists..."
           if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1; then
             echo "Lambda function not found. Deploying Lambda CloudFormation template..."
-            # FIXED: Download the template file from S3 first
             curl -o lambda-template.yaml https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml
+            
+            # This comment has been moved to its own line
             aws cloudformation deploy \
-              --template-file lambda-template.yaml \ # FIXED: Changed --template-url to --template-file
+              --template-file lambda-template.yaml \
               --stack-name create-lambda-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \

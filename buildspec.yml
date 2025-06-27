@@ -15,14 +15,17 @@ phases:
       - echo "Logging in to Amazon ECR..."
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
       - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPOSITORY_NAME
-      # Use the CodeBuild-provided commit ID for a unique image tag
+      # Use the unique Git commit hash for the image tag for best practice
       - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION}
 
   build:
     commands:
-      - echo "--- Step 1: Check for ECR Repository ---"
-      # This is a multi-line script block. The `- |` is critical.
+      # All logic is now inside a single command block to prevent YAML syntax errors.
+      # The 'set -e' command ensures the script will exit immediately if any command fails.
       - |
+        set -e
+
+        echo "--- Step 1: Check for ECR Repository ---"
         if ! aws ecr describe-repositories --repository-names $ECR_REPOSITORY_NAME --region $AWS_DEFAULT_REGION > /dev/null 2>&1; then
           echo "ECR repository '$ECR_REPOSITORY_NAME' not found. Creating it with CloudFormation..."
           aws cloudformation create-stack \
@@ -36,18 +39,14 @@ phases:
           echo "ECR repository '$ECR_REPOSITORY_NAME' already exists. Skipping creation."
         fi
 
-      - echo "Building the Docker image..."
-      - docker build -t $ECR_REPOSITORY_NAME:$IMAGE_TAG .
-      - docker tag $ECR_REPOSITORY_NAME:$IMAGE_TAG $REPOSITORY_URI:$IMAGE_TAG
+        echo "--- Step 2: Build and Push Docker Image ---"
+        echo "Building the Docker image with tag: $IMAGE_TAG"
+        docker build -t $REPOSITORY_URI:$IMAGE_TAG .
+        
+        echo "Pushing the Docker image to ECR..."
+        docker push $REPOSITORY_URI:$IMAGE_TAG
 
-  post_build:
-    commands:
-      - echo "Pushing the Docker image to ECR..."
-      - docker push $REPOSITORY_URI:$IMAGE_TAG
-      
-      - echo "--- Step 2: Check for and Create/Update Lambda Function ---"
-      # This is the second multi-line script block. The `- |` is critical.
-      - |
+        echo "--- Step 3: Check for and Create/Update Lambda Function ---"
         if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_DEFAULT_REGION > /dev/null 2>&1; then
           echo "Lambda function '$LAMBDA_FUNCTION_NAME' not found. Creating it now via CloudFormation..."
           aws cloudformation create-stack \
@@ -60,12 +59,12 @@ phases:
           aws cloudformation wait stack-create-complete --stack-name Create-Lambda-For-Pipeline --region $AWS_DEFAULT_REGION
           echo "Lambda function created successfully."
         else
-          echo "Lambda function '$LAMBDA_FUNCTION_NAME' already exists. Updating its code..."
+          echo "Lambda function '$LAMBDA_FUNCTION_NAME' already exists. Updating its code with the new image..."
           aws lambda update-function-code \
             --function-name $LAMBDA_FUNCTION_NAME \
             --image-uri $REPOSITORY_URI:$IMAGE_TAG \
             --region $AWS_DEFAULT_REGION
-          echo "Lambda function updated successfully with the new image."
+          echo "Lambda function updated successfully."
         fi
-      
-      - echo "Build and Deploy process completed."
+
+        echo "Build and Deploy process completed."

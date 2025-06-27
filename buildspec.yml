@@ -13,20 +13,21 @@ phases:
       - echo "Starting the build process..."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - IMAGE_TAG=$COMMIT_ID
-      - echo "GitHub Commit ID: $IMAGE_TAG"
+      # CORRECTED LINE: The entire command is wrapped in single quotes to
+      # prevent the YAML parser from misinterpreting the colon ':'.
+      - 'echo "GitHub Commit ID: $IMAGE_TAG"'
 
   build:
     commands:
       - echo "Building the Docker image with tag $IMAGE_TAG..."
-      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+      # This line also has a colon, so it's best practice to quote it too.
+      - 'docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .'
 
-  # The 'post_build' phase contains a multi-line script.
-  # Using the pipe character '|' is crucial here. It tells YAML to treat
-  # the entire indented block as a single, literal string, preventing
-  # parsing errors caused by colons (:) within the commands.
   post_build:
     commands:
       - echo "Tagging, Pushing, and Deploying to each account..."
+      # The pipe '|' is the correct way to handle this multi-line script.
+      # This part was already correct.
       - |
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "--------------------------------------------------"

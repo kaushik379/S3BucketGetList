@@ -55,6 +55,7 @@ phases:
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
               --parameter-overrides RepositoryName=$IMAGE_REPO_NAME
+              --debug
           else
             echo "ECR repository already exists."
           fi
@@ -77,6 +78,7 @@ phases:
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
               --parameter-overrides LambdaImageTag=$IMAGE_TAG
+              --debug
           else
             echo "Updating existing Lambda function..."
             aws lambda update-function-code \

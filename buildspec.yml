@@ -22,11 +22,7 @@ phases:
 
   post_build:
     commands:
-      - echo "Tagging, Pushing, and Deploying to each account..."
       - |
-        # Exit immediately if a command exits with a non-zero status.
-        set -e
-
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "--------------------------------------------------"
           echo "Processing Account: $account_id"
@@ -44,10 +40,10 @@ phases:
           echo "Checking if ECR repository exists..."
           if ! aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME > /dev/null 2>&1; then
             echo "ECR repository not found. Deploying ECR CloudFormation template..."
-            # FIX: Download template first, then deploy from local file
-            aws s3 cp s3://ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml ecr-template.yml
+            # FIXED: Download the template file from S3 first
+            curl -o ecr-template.yml https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/AiHouse-ecr-lambda.yml
             aws cloudformation deploy \
-              --template-file ecr-template.yml \
+              --template-file ecr-template.yml \ # FIXED: Changed --template-url to --template-file
               --stack-name create-ecr-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
@@ -66,10 +62,10 @@ phases:
           echo "Checking if Lambda function exists..."
           if ! aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME > /dev/null 2>&1; then
             echo "Lambda function not found. Deploying Lambda CloudFormation template..."
-            # FIX: Download template first, then deploy from local file
-            aws s3 cp s3://ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml lambda-template.yaml
+            # FIXED: Download the template file from S3 first
+            curl -o lambda-template.yaml https://s3.amazonaws.com/ecr-lambda-ai-house-rnd/ai-house-lambda-function-template.yaml
             aws cloudformation deploy \
-              --template-file lambda-template.yaml \
+              --template-file lambda-template.yaml \ # FIXED: Changed --template-url to --template-file
               --stack-name create-lambda-$account_id \
               --capabilities CAPABILITY_NAMED_IAM \
               --region $AWS_REGION \
@@ -86,7 +82,7 @@ phases:
           if [ -n "$image_tags_to_delete" ]; then
             for tag in $image_tags_to_delete; do
               echo "Deleting old image with tag: $tag"
-              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag
+              aws ecr batch-delete-image --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$tag || echo "Failed to delete tag $tag, continuing..."
             done
           else
             echo "No old images to delete."

@@ -11,7 +11,6 @@ phases:
   build:
     commands:
       - echo "Starting Lambda deployment stage..."
-      - IMAGE_TAG=$(cat image_tag.txt)
       - |
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "=============================="
@@ -26,7 +25,7 @@ phases:
           export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
 
           echo "Fetching image digest from ECR..."
-          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=$IMAGE_TAG --query "imageDetails[0].imageDigest" --output text)
+          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=latest --query "imageDetails[0].imageDigest" --output text)
 
           echo "Updating Lambda function..."
           aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"

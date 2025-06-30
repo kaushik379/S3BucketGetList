@@ -13,8 +13,7 @@ phases:
       - echo "Starting Lambda deployment stage..."
       - IMAGE_TAG=$(cat image_tag.txt)
       - echo "Deploying Lambda using image tag: $IMAGE_TAG"
-      - |
-        bash -c '
+      - >
         for account_id in $TARGET_ACCOUNT_IDS; do
           echo "=============================="
           echo "Updating Lambda in account: $account_id"
@@ -37,4 +36,3 @@ phases:
           unset AWS_SECRET_ACCESS_KEY
           unset AWS_SESSION_TOKEN
         done
-        '

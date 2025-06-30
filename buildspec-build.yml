@@ -3,7 +3,7 @@ version: 0.2
 env:
   variables:
     AWS_REGION: "us-east-1"
-    TARGET_ACCOUNT_IDS: "861530259719 418272799989"
+    TARGET_ACCOUNT_IDS: "861530259719"
     IMAGE_REPO_NAME: "demoimages"
 
 phases:

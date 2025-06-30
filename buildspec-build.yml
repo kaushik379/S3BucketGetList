@@ -10,7 +10,6 @@ phases:
   pre_build:
     commands:
       - echo "Starting the pre_build stage..."
-      - echo "Hello .........."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - IMAGE_TAG=latest
       - echo $IMAGE_TAG > image_tag.txt
@@ -53,5 +52,3 @@ artifacts:
   files:
     - image_tag.txt
     - imageDetail.json
-
-    

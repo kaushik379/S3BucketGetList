@@ -11,6 +11,7 @@ phases:
   build:
     commands:
       - echo "Starting Lambda deployment stage..."
+      - cat image_tag.txt
       - IMAGE_TAG=$(cat image_tag.txt)
       - echo "Deploying Lambda using image tag: $IMAGE_TAG"
       - >

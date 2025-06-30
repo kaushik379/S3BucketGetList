@@ -30,7 +30,7 @@ phases:
           TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
 
           echo "Assuming role for account $account_id..."
-          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "BuildStagePush-$account_id")
+          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/RND-trust-role-lambda-ecr --role-session-name "BuildStagePush-$account_id")
           export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
           export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
           export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)

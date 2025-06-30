@@ -1,22 +1,14 @@
-# YAML Validator requires a version.
 version: 0.2
 
-# The 'env' block is indented by 0 spaces.
 env:
-  # 'variables' is indented by 2 spaces.
   variables:
-    # Each key-value pair is indented by 4 spaces.
     AWS_REGION: "us-east-1"
     TARGET_ACCOUNT_IDS: "861530259719"
     IMAGE_REPO_NAME: "demoimages"
 
-# The 'phases' block is indented by 0 spaces.
 phases:
-  # Each phase ('pre_build', 'build', etc.) is indented by 2 spaces.
   pre_build:
-    # 'commands' is indented by 4 spaces.
     commands:
-      # Each command in the list starts with a '-' and is indented by 6 spaces.
       - echo "Starting the pre_build stage..."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
       - IMAGE_TAG=latest
@@ -27,18 +19,11 @@ phases:
       - echo "Building Docker image: $IMAGE_REPO_NAME:latest"
       - docker build -t $IMAGE_REPO_NAME:latest .
 
-  # This is the phase that is causing the error.
   post_build:
-    # 'commands' is indented by 4 spaces.
     commands:
-      # The first command is a multi-line script. It starts with '-' and '|'.
-      # The '-' is at 6 spaces.
       - |
-        # IMPORTANT: The first line of the script MUST be indented more than the '-'.
-        # This line is indented by 8 spaces. All lines below must have at least 8 spaces.
         echo "Pushing Docker image to each target account..."
         for account_id in $TARGET_ACCOUNT_IDS; do
-          # These lines are indented by 10 spaces.
           echo "-------------------------"
           echo "Pushing to Account: $account_id"
           echo "-------------------------"
@@ -61,14 +46,12 @@ phases:
           unset AWS_SECRET_ACCESS_KEY
           unset AWS_SESSION_TOKEN
         done
-      # This is the SECOND command in the post_build list.
-      # It starts with '-' at the same level as the first command (6 spaces).
-      - echo "{\"tag\":\"latest\"}" > imageDetail.json
 
-# The 'artifacts' block is indented by 0 spaces.
+        # THE FIX IS HERE: This command is now the LAST line of the script block.
+        echo "Creating imageDetail.json artifact..."
+        echo "{\"tag\":\"latest\"}" > imageDetail.json
+
 artifacts:
-  # 'files' is indented by 2 spaces.
   files:
-    # Each file is in a list, indented by 4 spaces.
     - image_tag.txt
     - imageDetail.json

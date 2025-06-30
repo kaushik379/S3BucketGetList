@@ -12,13 +12,13 @@ phases:
       - echo "Starting the pre_build stage..."
       - echo "Hello .........."
       - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
-      - IMAGE_TAG=$COMMIT_ID
+      - IMAGE_TAG=latest
       - echo $IMAGE_TAG > image_tag.txt
 
   build:
     commands:
-      - echo "Building Docker image: $IMAGE_REPO_NAME:$IMAGE_TAG"
-      - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+      - echo "Building Docker image: $IMAGE_REPO_NAME:latest"
+      - docker build -t $IMAGE_REPO_NAME:latest .
 
   post_build:
     commands:
@@ -39,15 +39,15 @@ phases:
           echo "Login to ECR for $account_id..."
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $TARGET_ECR_URI
 
-          echo "Tagging and pushing image to $TARGET_ECR_URI:$IMAGE_TAG"
-          docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $TARGET_ECR_URI:$IMAGE_TAG
-          docker push $TARGET_ECR_URI:$IMAGE_TAG
+          echo "Tagging and pushing image to $TARGET_ECR_URI:latest"
+          docker tag $IMAGE_REPO_NAME:latest $TARGET_ECR_URI:latest
+          docker push $TARGET_ECR_URI:latest
 
           unset AWS_ACCESS_KEY_ID
           unset AWS_SECRET_ACCESS_KEY
           unset AWS_SESSION_TOKEN
         done
-      - echo "{\"tag\":\"$IMAGE_TAG\"}" > imageDetail.json
+      - echo "{\"tag\":\"latest\"}" > imageDetail.json
 
 artifacts:
   files:

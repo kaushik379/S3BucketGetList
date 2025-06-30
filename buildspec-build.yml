@@ -21,35 +21,10 @@ phases:
 
   post_build:
     commands:
-      - |
-        echo "Pushing Docker image to each target account..."
-        for account_id in $TARGET_ACCOUNT_IDS; do
-          echo "-------------------------"
-          echo "Pushing to Account: $account_id"
-          echo "-------------------------"
-          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
-
-          echo "Assuming role for account $account_id..."
-          CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "BuildStagePush-$account_id")
-          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
-          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
-          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
-
-          echo "Login to ECR for $account_id..."
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $TARGET_ECR_URI
-
-          echo "Tagging and pushing image to $TARGET_ECR_URI:latest"
-          docker tag $IMAGE_REPO_NAME:latest $TARGET_ECR_URI:latest
-          docker push $TARGET_ECR_URI:latest
-
-          unset AWS_ACCESS_KEY_ID
-          unset AWS_SECRET_ACCESS_KEY
-          unset AWS_SESSION_TOKEN
-        done
-
-        # THE FIX IS HERE: This command is now the LAST line of the script block.
-        echo "Creating imageDetail.json artifact..."
-        echo "{\"tag\":\"latest\"}" > imageDetail.json
+      # This is the entire for-loop converted to a single line. It is ugly but will not fail YAML parsing.
+      - for account_id in $TARGET_ACCOUNT_IDS; do echo "-------------------------"; echo "Pushing to Account: $account_id"; echo "-------------------------"; TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"; echo "Assuming role for account $account_id..."; CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/Ai-house-ecr-lambda-sts --role-session-name "BuildStagePush-$account_id"); export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId); export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey); export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken); echo "Login to ECR for $account_id..."; aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $TARGET_ECR_URI; echo "Tagging and pushing image to $TARGET_ECR_URI:latest"; docker tag $IMAGE_REPO_NAME:latest $TARGET_ECR_URI:latest; docker push $TARGET_ECR_URI:latest; unset AWS_ACCESS_KEY_ID; unset AWS_SECRET_ACCESS_KEY; unset AWS_SESSION_TOKEN; done
+      # This is the second command, creating the artifact.
+      - echo "{\"tag\":\"latest\"}" > imageDetail.json
 
 artifacts:
   files:

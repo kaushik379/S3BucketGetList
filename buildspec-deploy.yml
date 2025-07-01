@@ -2,8 +2,7 @@ version: 0.2
 
 env:
   variables:
-    AWS_REGION: "us-east-1"
-    TARGET_ACCOUNT_IDS: "861530259719"
+    # Variables are now passed from the CodeBuild project environment
     IMAGE_REPO_NAME: "demoimages"
     LAMBDA_FUNCTION_NAME: "web-adapter-demo-ci-cd"
 
@@ -12,11 +11,18 @@ phases:
     commands:
       - echo "Starting Lambda deployment stage..."
       - |
-        for account_id in $TARGET_ACCOUNT_IDS; do
+        # THE FIX: Loop over the TARGETS variable
+        for target in $TARGETS; do
+          # THE FIX: Parse the account ID and region from the pair
+          account_id=$(echo $target | cut -d':' -f1)
+          target_region=$(echo $target | cut -d':' -f2)
+
           echo "=============================="
-          echo "Updating Lambda in account: $account_id"
+          echo "Updating Lambda in account: $account_id in Region: $target_region"
           echo "=============================="
-          TARGET_ECR_URI="$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPO_NAME"
+          
+          # THE FIX: Construct the ECR URI using the parsed target_region
+          TARGET_ECR_URI="$account_id.dkr.ecr.$target_region.amazonaws.com/$IMAGE_REPO_NAME"
 
           echo "Assuming role for account $account_id..."
           CREDS=$(aws sts assume-role --role-arn arn:aws:iam::$account_id:role/RND-trust-role-lambda-ecr --role-session-name "DeployStage-$account_id")
@@ -25,10 +31,12 @@ phases:
           export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
 
           echo "Fetching image digest from ECR..."
-          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=latest --query "imageDetails[0].imageDigest" --output text)
+          # THE FIX: Use the target_region to describe the image
+          IMAGE_DIGEST=$(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --image-ids imageTag=latest --query "imageDetails[0].imageDigest" --output text --region $target_region)
 
           echo "Updating Lambda function..."
-          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST"
+          # THE FIX: Use the target_region to update the function
+          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --image-uri "$TARGET_ECR_URI@$IMAGE_DIGEST" --region $target_region
 
           unset AWS_ACCESS_KEY_ID
           unset AWS_SECRET_ACCESS_KEY

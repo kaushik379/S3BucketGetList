@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 2-Stage CodePipeline for Docker to Lambda with Cross-Account Push
+
+Parameters:
+  GitHubOAuthToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub OAuth Token for pipeline source access
+
+Resources:
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::AccountId}-s3-lambda-pipeline-artifacts"
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CodePipelineServiceRole-S3Lambda
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelineS3LambdaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - s3:*
+                Resource: "*"
+
+  CodeBuildProjectBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: build-image-and-push
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-build.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_REGION
+            Value: us-east-1
+          - Name: IMAGE_REPO_NAME
+            Value: demoimages
+          - Name: TARGET_ACCOUNT_IDS
+            Value: "861530259719 418272799989"
+      ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/RND-multi-account-access-ecr-lambda
+
+  CodeBuildProjectDeploy:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: deploy-lambda
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-deploy.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: AWS_REGION
+            Value: us-east-1
+          - Name: IMAGE_REPO_NAME
+            Value: demoimages
+          - Name: TARGET_ACCOUNT_IDS
+            Value: "861530259719"
+          - Name: LAMBDA_FUNCTION_NAME
+            Value: web-adapter-demo-ci-cd
+      ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/RND-multi-account-access-ecr-lambda
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: S3LambdaDockerPipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: kaushik379
+                Repo: S3BucketGetList
+                Branch: main
+                OAuthToken: !Ref GitHubOAuthToken
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: BuildDockerImageAndPush
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProjectBuild
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: DeployToLambda
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProjectDeploy
+                PrimarySource: SourceOutput # <--- THIS LINE FIXES THE ERROR
+              RunOrder: 1

@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Step 1 - Create ECR repository
+
+Resources:
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: demoimages
+      ImageScanningConfiguration:
+        scanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+Outputs:
+  ECRRepoUri:
+    Description: URI of the created ECR repository
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/demoimages"

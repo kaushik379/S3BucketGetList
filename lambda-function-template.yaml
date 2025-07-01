@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create a Lambda function using an existing ECR image and configure a Function URL
+
+Resources:
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lambda-execution-role-web-adapter
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  WebAdapterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: web-adapter-demo-checking
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Code:
+        ImageUri: 943143228843.dkr.ecr.us-east-1.amazonaws.com/lambda:archivev3
+      MemorySize: 500
+      Timeout: 600 # 10 minutes
+      EphemeralStorage:
+        Size: 512
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          AWS_LWA_INVOKE_MODE: RESPONSE_STREAM
+
+  WebAdapterFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref WebAdapterFunction
+      AuthType: NONE
+      InvokeMode: RESPONSE_STREAM
+
+  WebAdapterPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref WebAdapterFunction
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+Outputs:
+
+  LambdaFunctionURL:
+    Description: Lambda Function URL
+    Value: !GetAtt WebAdapterFunctionUrl.FunctionUrl

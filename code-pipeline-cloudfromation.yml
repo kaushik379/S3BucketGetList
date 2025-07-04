@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 2-Stage CodePipeline for Docker to Lambda with Cross-Account Push
+Description: 3-Stage CodePipeline with Manual Approval for Multi-Region Docker to Lambda Deployments
 
 Parameters:
   GitHubOAuthToken:
     Type: String
     NoEcho: true
-    Description: GitHub OAuth Token for pipeline source access
+    Description: GitHub OAuth Token for pipeline source access.
 
 Resources:
 
@@ -35,6 +35,9 @@ Resources:
                   - codebuild:BatchGetBuilds
                   - codebuild:StartBuild
                   - s3:*
+                  # THE FIX: Add permissions for the approval action
+                  - iam:PassRole
+                  - sns:Publish
                 Resource: "*"
 
   CodeBuildProjectBuild:
@@ -52,12 +55,10 @@ Resources:
         Image: aws/codebuild/standard:7.0
         PrivilegedMode: true
         EnvironmentVariables:
-          - Name: AWS_REGION
-            Value: us-east-1
           - Name: IMAGE_REPO_NAME
             Value: demoimages
-          - Name: TARGET_ACCOUNT_IDS
-            Value: "861530259719 418272799989"
+          - Name: TARGETS
+            Value: "861530259719:us-east-1 943143228843:us-west-2"
       ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/RND-multi-account-access-ecr-lambda
 
   CodeBuildProjectDeploy:
@@ -75,14 +76,12 @@ Resources:
         Image: aws/codebuild/standard:7.0
         PrivilegedMode: false
         EnvironmentVariables:
-          - Name: AWS_REGION
-            Value: us-east-1
           - Name: IMAGE_REPO_NAME
             Value: demoimages
-          - Name: TARGET_ACCOUNT_IDS
-            Value: "861530259719"
           - Name: LAMBDA_FUNCTION_NAME
             Value: web-adapter-demo-ci-cd
+          - Name: TARGETS
+            Value: "861530259719:us-east-1 943143228843:us-west-2"
       ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/RND-multi-account-access-ecr-lambda
 
   CodePipeline:
@@ -127,6 +126,21 @@ Resources:
                 ProjectName: !Ref CodeBuildProjectBuild
               RunOrder: 1
 
+        # THE FIX: This is the new Manual Approval stage.
+        - Name: Approve
+          Actions:
+            - Name: ManualApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              RunOrder: 1
+              Configuration:
+                CustomData: "Please review the build and approve the deployment to production."
+                # Optional: You can also add an SNS topic to notify people.
+                # NotificationArn: "arn:aws:sns:us-east-1:ACCOUNT_ID:MyApprovalTopic"
+
         - Name: Deploy
           Actions:
             - Name: DeployToLambda
@@ -140,5 +154,5 @@ Resources:
                 - Name: BuildOutput
               Configuration:
                 ProjectName: !Ref CodeBuildProjectDeploy
-                PrimarySource: SourceOutput # <--- THIS LINE FIXES THE ERROR
+                PrimarySource: SourceOutput
               RunOrder: 1
